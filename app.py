@@ -2,6 +2,8 @@ import base64
 import json
 import logging
 import os
+import signal
+import sys
 import time
 from email.header import decode_header, make_header
 
@@ -26,6 +28,11 @@ SCOPES = [
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+# Ops/admin chat: errors and service status. Falls back to
+# the main chat when not configured.
+_admin_chat_id = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+TELEGRAM_ADMIN_CHAT_ID = _admin_chat_id or TELEGRAM_CHAT_ID
 
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "30"))
 
@@ -312,7 +319,7 @@ def get_message(service, message_id):
 # Telegram
 # ============================================================
 
-def send_telegram(text):
+def send_telegram(text, chat_id=None):
     url = (
         f"https://api.telegram.org/bot"
         f"{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -321,7 +328,7 @@ def send_telegram(text):
     response = requests.post(
         url,
         json={
-            "chat_id": TELEGRAM_CHAT_ID,
+            "chat_id": chat_id or TELEGRAM_CHAT_ID,
             "text": text,
         },
         timeout=30,
@@ -332,10 +339,10 @@ def send_telegram(text):
 
 def notify_admin(text):
     """
-    Safely sends an error notification to the admin chat.
+    Safely sends a notification to the admin chat.
     """
     try:
-        send_telegram(text)
+        send_telegram(text, TELEGRAM_ADMIN_CHAT_ID)
     except Exception:
         logger.exception(
             "Failed to send error notification to Telegram"
@@ -501,9 +508,26 @@ def poll_gmail(service, processed):
                 message
             )
 
+            # Company chat.
             send_telegram(
                 telegram_text
             )
+
+            # Admin chat also receives the mail. A failure of
+            # this copy must not fail the whole processing,
+            # otherwise the message would be re-sent to the
+            # company chat on the next poll.
+            try:
+                send_telegram(
+                    telegram_text,
+                    TELEGRAM_ADMIN_CHAT_ID
+                )
+
+            except Exception:
+                logger.exception(
+                    "Failed to copy message to admin chat: %s",
+                    message_id
+                )
 
             logger.info(
                 "Telegram message sent successfully: %s",
@@ -555,6 +579,22 @@ def main():
     )
 
     processed = load_state()
+
+    notify_admin(
+        "🚀 Форвардер Gmail → Telegram запущен\n"
+        f"Домены: {', '.join(ALLOWED_DOMAINS)}\n"
+        f"Интервал опроса: {POLL_INTERVAL} сек."
+    )
+
+    def handle_stop(signum, frame):
+        notify_admin(
+            f"🛑 Форвардер остановлен (signal {signum})"
+        )
+
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, handle_stop)
+    signal.signal(signal.SIGINT, handle_stop)
 
     credentials = None
     service = None
