@@ -6,6 +6,7 @@ import signal
 import sys
 import time
 from email.header import decode_header, make_header
+from email.utils import parseaddr
 
 import requests
 from dotenv import load_dotenv
@@ -307,6 +308,21 @@ def get_header(headers, name):
     return ""
 
 
+def sender_domain(header_value):
+    """
+    Extracts the real domain from a From header value.
+    """
+    _, addr = parseaddr(header_value or "")
+
+    if "@" not in addr:
+        return ""
+
+    return addr.rsplit(
+        "@",
+        1
+    )[-1].strip().lower()
+
+
 def get_message(service, message_id):
     return service.users().messages().get(
         userId="me",
@@ -503,6 +519,32 @@ def poll_gmail(service, processed):
                 sender,
                 subject
             )
+
+            # Gmail search from:(@domain) is token-based, so
+            # spoofed senders like
+            # name_at_gmail_com@attacker.tld match the query.
+            # Verify the real sender domain before forwarding.
+            actual_domain = sender_domain(sender)
+
+            if actual_domain not in ALLOWED_DOMAINS:
+                logger.info(
+                    "Skipping message %s: sender domain "
+                    "%s is not in the allow list",
+                    message_id,
+                    actual_domain or "(empty)"
+                )
+
+                # Mark as processed so the spoofed message is
+                # not inspected again on every poll.
+                processed.add(
+                    message_id
+                )
+
+                save_state(
+                    processed
+                )
+
+                continue
 
             telegram_text = format_message(
                 message
