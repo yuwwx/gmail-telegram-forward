@@ -330,6 +330,18 @@ def send_telegram(text):
     response.raise_for_status()
 
 
+def notify_admin(text):
+    """
+    Safely sends an error notification to the admin chat.
+    """
+    try:
+        send_telegram(text)
+    except Exception:
+        logger.exception(
+            "Failed to send error notification to Telegram"
+        )
+
+
 # ============================================================
 # Message formatting
 # ============================================================
@@ -544,29 +556,49 @@ def main():
 
     processed = load_state()
 
-    credentials = get_credentials()
+    credentials = None
+    service = None
 
-    service = build(
-        "gmail",
-        "v1",
-        credentials=credentials
-    )
-
-    logger.info(
-        "Gmail API initialized successfully"
-    )
+    # Flap suppression: notify about a failure only once,
+    # until a poll succeeds again.
+    failure_notified = False
 
     while True:
         try:
+            # Initialize only if it never succeeded before.
+            if service is None:
+                credentials = get_credentials()
+
+                service = build(
+                    "gmail",
+                    "v1",
+                    credentials=credentials
+                )
+
+                logger.info(
+                    "Gmail API initialized successfully"
+                )
+
             poll_gmail(
                 service,
                 processed
             )
 
-        except Exception:
+            # Success: re-arm notifications.
+            failure_notified = False
+
+        except Exception as e:
             logger.exception(
                 "Gmail polling failed"
             )
+
+            if not failure_notified:
+                notify_admin(
+                    f"⚠️ Ошибка форвардера Gmail → Telegram:\n"
+                    f"`{type(e).__name__}: {e}`"
+                )
+
+                failure_notified = True
 
         logger.info(
             "Next poll in %d seconds",
