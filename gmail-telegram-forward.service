@@ -1,0 +1,24 @@
+[Unit]
+Description=Gmail to Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/gmail-telegram-forward
+ExecStart=/opt/gmail-telegram-forward/.venv/bin/python /opt/gmail-telegram-forward/app.py
+
+Restart=always
+RestartSec=10
+
+EnvironmentFile=/opt/gmail-telegram-forward/.env
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/gmail-telegram-forward
+
+[Install]
+WantedBy=multi-user.target
